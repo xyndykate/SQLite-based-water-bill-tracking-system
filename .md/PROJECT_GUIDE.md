@@ -101,6 +101,7 @@ python main.py
 ```
 
 Shows:
+
 - Active tenants count
 - Water readings per tenant
 - Bills generated
@@ -109,8 +110,7 @@ Shows:
 ### Run Demo
 
 ```bash
-python demo.py
-```
+python demo.py```
 Adds 3 sample tenants with readings and generates bills.
 
 ### View Database
@@ -177,7 +177,7 @@ python view_db.py query  # Interactive SQL
 
 ### Method 2: DB Browser for SQLite (GUI)
 
-1. Download from: https://sqlitebrowser.org/dl/
+1. Download from: [https://sqlitebrowser.org/dl/](https://sqlitebrowser.org/dl/)
 2. Open `water_bill.db`
 3. Browse tables visually
 
@@ -207,6 +207,7 @@ BILLING_CYCLE_DAYS=30
 ## 📈 Current Database Status
 
 **As of last update:**
+
 - **3 Tenants**: John Doe, Jane Smith, Bob Johnson
 - **18 Water Readings**: Multiple readings per tenant
 - **3 Bills**: Generated and ready
@@ -242,6 +243,7 @@ BILLING_CYCLE_DAYS=30
 ## 🔄 Migration Notes
 
 **Converted from PostgreSQL to SQLite:**
+
 - ✅ Removed psycopg2 dependency
 - ✅ Changed placeholder syntax: `%s` → `?`
 - ✅ Updated boolean values: `TRUE/FALSE` → `1/0`
@@ -315,6 +317,7 @@ Run `python main.py` to see:
 ## 📞 Support
 
 For issues or questions:
+
 1. Check `HOW_TO_VIEW_DATABASE.md` for database viewing help
 2. Run `python db_utils.py setup` to reset database
 3. Check system status with `python main.py`
