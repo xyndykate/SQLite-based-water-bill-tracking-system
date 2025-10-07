@@ -16,7 +16,7 @@ def demo_sqlite():
         from services import WaterBillService
         from database import db_manager
         
-        # Check database connection
+        # Check db connection
         if not db_manager.test_connection():
             print("❌ Database connection failed! Run: python db_utils.py setup")
             return
