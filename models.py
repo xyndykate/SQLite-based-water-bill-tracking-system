@@ -7,9 +7,14 @@ from typing import Optional, List, Dict, Any
 from dataclasses import dataclass
 import logging
 
-from database import db_manager
+from database import DatabaseManager, db_manager
 
 logger = logging.getLogger(__name__)
+
+class BaseRepository:
+    """Base repository with database access."""
+    def __init__(self, db_manager_instance=None):
+        self.db_manager = db_manager_instance or db_manager
 
 @dataclass
 class Tenant:
@@ -62,11 +67,10 @@ class SystemSetting:
     updated_date: Optional[datetime] = None
     id: Optional[int] = None
 
-class TenantRepository:
+class TenantRepository(BaseRepository):
     """Repository for tenant data operations."""
     
-    @staticmethod
-    def create(tenant: Tenant) -> Optional[Tenant]:
+    def create(self, tenant: Tenant) -> Optional[Tenant]:
         """Create a new tenant."""
         query = """
             INSERT INTO tenants (tenant_id, name, apartment_number, phone, email, is_active)
@@ -74,11 +78,11 @@ class TenantRepository:
             RETURNING id, created_date, updated_date
         """
         try:
-            result = db_manager.execute_query(
-                query, 
-                (tenant.tenant_id, tenant.name, tenant.apartment_number, 
+            result = self.db_manager.execute_query(
+                query,
+                (tenant.tenant_id, tenant.name, tenant.apartment_number,
                  tenant.phone, tenant.email, tenant.is_active),
-                fetch=1
+                fetch=True
             )
             if result:
                 row = result[0]
@@ -169,11 +173,10 @@ class TenantRepository:
             logger.error(f"Failed to check tenant existence {tenant_id}: {e}")
             return 0
 
-class WaterReadingRepository:
+class WaterReadingRepository(BaseRepository):
     """Repository for water reading data operations."""
     
-    @staticmethod
-    def create(reading: WaterReading) -> Optional[WaterReading]:
+    def create(self, reading: WaterReading) -> Optional[WaterReading]:
         """Create a new water reading."""
         query = """
             INSERT INTO water_readings (tenant_id, reading_units, reading_date, notes, created_by)
@@ -239,11 +242,10 @@ class WaterReadingRepository:
             logger.error(f"Failed to get readings for range: {e}")
             return []
 
-class BillRepository:
+class BillRepository(BaseRepository):
     """Repository for bill data operations."""
     
-    @staticmethod
-    def create(bill: Bill) -> Optional[Bill]:
+    def create(self, bill: Bill) -> Optional[Bill]:
         """Create a new bill."""
         query = """
             INSERT INTO bills (tenant_id, bill_period_start, bill_period_end, 
@@ -306,11 +308,10 @@ class BillRepository:
             logger.error(f"Failed to mark bill {bill_id} as paid: {e}")
         return 0
 
-class SystemSettingRepository:
+class SystemSettingRepository(BaseRepository):
     """Repository for system settings operations."""
     
-    @staticmethod
-    def get_setting(key: str) -> Optional[str]:
+    def get_by_key(self, key: str) -> Optional[SystemSetting]:
         """Get a system setting value."""
         query = "SELECT setting_value FROM system_settings WHERE setting_key = ?"
         try:

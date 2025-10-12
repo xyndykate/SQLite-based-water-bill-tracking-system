@@ -20,302 +20,193 @@ class WaterBillService:
         self.tenant_repo = TenantRepository()
         self.reading_repo = WaterReadingRepository()
         self.bill_repo = BillRepository()
-        self.settings_repo = SystemSettingRepository()
+        self.setting_repo = SystemSettingRepository()
+        self.db_manager = self.tenant_repo.db_manager
     
-    # Tenant operations
-    def add_tenant(self, tenant_id: str, name: str, apartment_number: str, 
-                   phone: str = None, email: str = None) -> bool:
+    def add_tenant(self, tenant_id: str, name: str, apartment_number: str,
+                  phone: str = None, email: str = None) -> Tenant:
         """Add a new tenant."""
+        tenant = Tenant(
+            tenant_id=tenant_id,
+            name=name,
+            apartment_number=apartment_number,
+            phone=phone,
+            email=email
+        )
+        return self.tenant_repo.create(tenant)
+    
+    def delete_tenant(self, tenant_id: str) -> bool:
+        """
+        Delete a tenant and all their associated data (readings and bills).
+        
+        Args:
+            tenant_id: The ID of the tenant to delete
+            
+        Returns:
+            bool: True if deletion was successful
+            
+        Raises:
+            ValueError: If tenant not found
+        """
+        # Check if tenant exists
+        tenant = self.tenant_repo.get_by_id(tenant_id)
+        if not tenant:
+            raise ValueError(f"Tenant {tenant_id} not found")
+            
         try:
-            # Check if tenant already exists
-            if self.tenant_repo.exists(tenant_id):
-                logger.warning(f"Tenant {tenant_id} already exists")
-                return False
-            
-            tenant = Tenant(
-                tenant_id=tenant_id,
-                name=name,
-                apartment_number=apartment_number,
-                phone=phone,
-                email=email
-            )
-            
-            created_tenant = self.tenant_repo.create(tenant)
-            return created_tenant is not None
+            # Start a transaction
+            with self.db_manager.get_cursor() as cursor:
+                # Delete bills first (due to foreign key constraints)
+                cursor.execute("""
+                    DELETE FROM bills 
+                    WHERE tenant_id = ?
+                """, (tenant_id,))
+                
+                # Delete water readings
+                cursor.execute("""
+                    DELETE FROM water_readings 
+                    WHERE tenant_id = ?
+                """, (tenant_id,))
+                
+                # Finally delete the tenant
+                cursor.execute("""
+                    DELETE FROM tenants 
+                    WHERE tenant_id = ?
+                """, (tenant_id,))
+                
+            return True
             
         except Exception as e:
-            logger.error(f"Failed to add tenant: {e}")
-            return False
+            raise Exception(f"Failed to delete tenant: {str(e)}")
     
     def get_tenant(self, tenant_id: str) -> Optional[Tenant]:
         """Get tenant by ID."""
         return self.tenant_repo.get_by_id(tenant_id)
     
-    def get_all_tenants(self, active_only: bool = True) -> List[Tenant]:
+    def get_all_tenants(self) -> List[Tenant]:
         """Get all tenants."""
-        return self.tenant_repo.get_all(active_only)
+        return self.tenant_repo.get_all()
     
-    def update_tenant(self, tenant_id: str, name: str = None, apartment_number: str = None,
-                     phone: str = None, email: str = None) -> bool:
-        """Update tenant information."""
-        try:
-            tenant = self.tenant_repo.get_by_id(tenant_id)
-            if not tenant:
-                logger.warning(f"Tenant {tenant_id} not found")
-                return False
-            
-            # Update only provided fields
-            if name is not None:
-                tenant.name = name
-            if apartment_number is not None:
-                tenant.apartment_number = apartment_number
-            if phone is not None:
-                tenant.phone = phone
-            if email is not None:
-                tenant.email = email
-            
-            return self.tenant_repo.update(tenant)
-            
-        except Exception as e:
-            logger.error(f"Failed to update tenant: {e}")
-            return False
+    def add_water_reading(self, tenant_id: str, reading_units: float,
+                         reading_date: str, notes: str = None) -> WaterReading:
+        """Add a new water reading."""
+        # Validate tenant exists
+        tenant = self.tenant_repo.get_by_id(tenant_id)
+        if not tenant:
+            raise ValueError(f"Tenant {tenant_id} not found")
+        
+        # Convert date string to datetime if needed
+        if isinstance(reading_date, str):
+            reading_date = datetime.strptime(reading_date, '%Y-%m-%d')
+        
+        reading = WaterReading(
+            tenant_id=tenant_id,
+            reading_units=reading_units,
+            reading_date=reading_date.strftime('%Y-%m-%d'),
+            recorded_date=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            notes=notes
+        )
+        
+        return self.reading_repo.create(reading)
     
-    def remove_tenant(self, tenant_id: str, hard_delete: bool = False) -> bool:
-        """Remove a tenant (soft delete by default)."""
-        return self.tenant_repo.delete(tenant_id, soft_delete=not hard_delete)
+    def get_tenant_readings(self, tenant_id: str) -> List[WaterReading]:
+        """Get all readings for a tenant."""
+        return self.reading_repo.get_by_tenant(tenant_id)
     
-    # Water reading operations
-    def add_water_reading(self, tenant_id: str, reading_units: float, 
-                         reading_date: datetime = None, notes: str = None,
-                         created_by: str = None, validate: bool = True) -> bool:
-        """Add a water reading for a tenant."""
-        try:
-            # Verify tenant exists
-            if not self.tenant_repo.exists(tenant_id):
-                logger.warning(f"Tenant {tenant_id} not found")
-                return False
-            
-            if reading_date is None:
-                reading_date = datetime.now()
-            
-            # Validate reading progression if requested
-            if validate:
-                last_reading = self.reading_repo.get_latest_reading(tenant_id)
-                if last_reading and reading_units < float(last_reading.reading_units):
-                    logger.warning(f"New reading ({reading_units}) is lower than last reading ({last_reading.reading_units})")
-                    # In a real application, you might want to prompt the user or require confirmation
-            
-            reading = WaterReading(
-                tenant_id=tenant_id,
-                reading_units=float(reading_units),
-                reading_date=reading_date,
-                notes=notes,
-                created_by=created_by
-            )
-            
-            created_reading = self.reading_repo.create(reading)
-            return created_reading is not None
-            
-        except Exception as e:
-            logger.error(f"Failed to add water reading: {e}")
-            return False
-    
-    def get_tenant_readings(self, tenant_id: str, limit: int = None) -> List[WaterReading]:
-        """Get water readings for a tenant."""
-        return self.reading_repo.get_by_tenant(tenant_id, limit)
-    
-    def get_latest_reading(self, tenant_id: str) -> Optional[WaterReading]:
-        """Get the latest reading for a tenant."""
-        return self.reading_repo.get_latest_reading(tenant_id)
-    
-    # Bill operations
-    def calculate_bill(self, tenant_id: str, period_start: date = None, 
-                      period_end: date = None) -> Optional[Dict]:
-        """Calculate a water bill for a tenant."""
-        try:
-            # Verify tenant exists
-            tenant = self.tenant_repo.get_by_id(tenant_id)
-            if not tenant:
-                logger.warning(f"Tenant {tenant_id} not found")
-                return None
-            
-            # Get readings for the period
-            if period_start and period_end:
-                readings = self.reading_repo.get_reading_range(
-                    tenant_id, 
-                    datetime.combine(period_start, datetime.min.time()),
-                    datetime.combine(period_end, datetime.max.time())
-                )
-            else:
-                # Use last two readings
-                readings = self.reading_repo.get_by_tenant(tenant_id, limit=2)
-                readings.reverse()  # Chronological order
-            
-            if len(readings) < 2:
-                logger.warning(f"Insufficient readings for tenant {tenant_id}")
-                return None
-            
-            start_reading = readings[0]
-            end_reading = readings[-1]
-            
-            # Calculate consumption
-            units_consumed = end_reading.reading_units - start_reading.reading_units
-            
-            # Get rate from settings
-            rate_str = self.settings_repo.get_setting('default_rate_per_unit')
-            rate_per_unit = float(rate_str) if rate_str else 2.50
-            
-            total_amount = units_consumed * rate_per_unit
-            
-            # Get currency from settings
-            currency = self.settings_repo.get_setting('default_currency') or 'USD'
-            
-            # Convert reading_date to date object (handles both string and datetime)
-            if isinstance(start_reading.reading_date, str):
-                period_start = datetime.fromisoformat(start_reading.reading_date.replace('Z', '+00:00')).date()
-            else:
-                period_start = start_reading.reading_date.date() if hasattr(start_reading.reading_date, 'date') else start_reading.reading_date
-            
-            if isinstance(end_reading.reading_date, str):
-                period_end = datetime.fromisoformat(end_reading.reading_date.replace('Z', '+00:00')).date()
-            else:
-                period_end = end_reading.reading_date.date() if hasattr(end_reading.reading_date, 'date') else end_reading.reading_date
-            
-            bill_data = {
-                'tenant_id': tenant_id,
-                'tenant_name': tenant.name,
-                'apartment_number': tenant.apartment_number,
-                'period_start': period_start,
-                'period_end': period_end,
-                'start_reading': start_reading.reading_units,
-                'end_reading': end_reading.reading_units,
-                'units_consumed': units_consumed,
-                'rate_per_unit': rate_per_unit,
-                'total_amount': total_amount,
-                'currency': currency,
-                'start_reading_id': start_reading.id,
-                'end_reading_id': end_reading.id
-            }
-            
-            return bill_data
-            
-        except Exception as e:
-            logger.error(f"Failed to calculate bill: {e}")
-            return None
-    
-    def generate_bill(self, tenant_id: str, period_start: date = None, 
-                     period_end: date = None, due_days: int = 30) -> Optional[Bill]:
-        """Generate and save a bill for a tenant."""
-        try:
-            bill_data = self.calculate_bill(tenant_id, period_start, period_end)
-            if not bill_data:
-                return None
-            
-            # Calculate due date
-            due_date = date.today() + timedelta(days=due_days)
-            
-            bill = Bill(
-                tenant_id=tenant_id,
-                bill_period_start=bill_data['period_start'],
-                bill_period_end=bill_data['period_end'],
-                start_reading_id=bill_data['start_reading_id'],
-                end_reading_id=bill_data['end_reading_id'],
-                units_consumed=bill_data['units_consumed'],
-                rate_per_unit=bill_data['rate_per_unit'],
-                total_amount=bill_data['total_amount'],
-                currency=bill_data['currency'],
-                due_date=due_date
-            )
-            
-            return self.bill_repo.create(bill)
-            
-        except Exception as e:
-            logger.error(f"Failed to generate bill: {e}")
-            return None
+    def generate_bill(self, tenant_id: str, start_reading_id: int, end_reading_id: int,
+                     rate_per_unit: float = None) -> Bill:
+        """Generate a new bill from two readings."""
+        # Get readings
+        start_reading = self.reading_repo.get_by_id(start_reading_id)
+        end_reading = self.reading_repo.get_by_id(end_reading_id)
+        
+        if not start_reading or not end_reading:
+            raise ValueError("Invalid reading IDs")
+        
+        if start_reading.tenant_id != tenant_id or end_reading.tenant_id != tenant_id:
+            raise ValueError("Readings do not belong to the specified tenant")
+        
+        # Calculate consumption
+        units_consumed = end_reading.reading_units - start_reading.reading_units
+        if units_consumed <= 0:
+            raise ValueError("End reading must be greater than start reading")
+        
+        # Get rate
+        if rate_per_unit is None:
+            rate_per_unit = self._get_default_rate()
+        
+        # Calculate total
+        total_amount = units_consumed * rate_per_unit
+        
+        # Create bill
+        bill = Bill(
+            tenant_id=tenant_id,
+            bill_period_start=start_reading.reading_date,
+            bill_period_end=end_reading.reading_date,
+            start_reading_id=start_reading_id,
+            end_reading_id=end_reading_id,
+            units_consumed=units_consumed,
+            rate_per_unit=rate_per_unit,
+            total_amount=total_amount,
+            bill_status='generated'
+        )
+        
+        return self.bill_repo.create(bill)
     
     def get_tenant_bills(self, tenant_id: str) -> List[Bill]:
         """Get all bills for a tenant."""
         return self.bill_repo.get_by_tenant(tenant_id)
     
-    def mark_bill_paid(self, bill_id: int, payment_date: datetime = None) -> bool:
+    def get_outstanding_bills(self, tenant_id: str) -> List[Bill]:
+        """Get unpaid bills for a tenant."""
+        return [b for b in self.get_tenant_bills(tenant_id) if b.bill_status != 'paid']
+    
+    def mark_bill_paid(self, bill_id: int) -> Bill:
         """Mark a bill as paid."""
-        return self.bill_repo.mark_as_paid(bill_id, payment_date)
+        bill = self.bill_repo.get_by_id(bill_id)
+        if not bill:
+            raise ValueError(f"Bill {bill_id} not found")
+        
+        bill.bill_status = 'paid'
+        bill.payment_date = datetime.now().strftime('%Y-%m-%d')
+        return self.bill_repo.update(bill)
     
-    # Settings operations
-    def get_setting(self, key: str, default: str = None) -> str:
-        """Get a system setting."""
-        value = self.settings_repo.get_setting(key)
-        return value if value is not None else default
+    def get_tenant_summary(self, tenant_id: str) -> Dict:
+        """Get a summary of tenant activity."""
+        tenant = self.tenant_repo.get_by_id(tenant_id)
+        if not tenant:
+            raise ValueError(f"Tenant {tenant_id} not found")
+        
+        readings = self.get_tenant_readings(tenant_id)
+        bills = self.get_tenant_bills(tenant_id)
+        outstanding = self.get_outstanding_bills(tenant_id)
+        
+        total_paid = sum(b.total_amount for b in bills if b.bill_status == 'paid')
+        outstanding_amount = sum(b.total_amount for b in outstanding)
+        
+        return {
+            'tenant_id': tenant.tenant_id,
+            'name': tenant.name,
+            'apartment_number': tenant.apartment_number,
+            'total_readings': len(readings),
+            'total_bills': len(bills),
+            'last_reading_date': readings[-1].reading_date if readings else None,
+            'total_paid': total_paid,
+            'outstanding_amount': outstanding_amount,
+            'bills_paid': len(bills) - len(outstanding),
+            'bills_outstanding': len(outstanding)
+        }
     
-    def update_setting(self, key: str, value: str, description: str = None) -> bool:
+    def update_setting(self, key: str, value: str) -> SystemSetting:
         """Update a system setting."""
-        return self.settings_repo.set_setting(key, value, description)
-    
-    def get_all_settings(self) -> Dict[str, str]:
-        """Get all system settings."""
-        return self.settings_repo.get_all_settings()
-    
-    # Reporting and analytics
-    def get_tenant_summary(self, tenant_id: str = None) -> List[Dict]:
-        """Get tenant summary with consumption and billing info."""
-        # This would use the tenant_summary view from the database
-        from database import db_manager
+        setting = self.setting_repo.get_by_key(key)
+        if not setting:
+            raise ValueError(f"Setting {key} not found")
         
-        try:
-            if tenant_id:
-                query = "SELECT * FROM tenant_summary WHERE tenant_id = %s"
-                params = (tenant_id,)
-            else:
-                query = "SELECT * FROM tenant_summary ORDER BY apartment_number"
-                params = ()
-            
-            result = db_manager.execute_query(query, params, fetch=True)
-            return [dict(row) for row in result]
-            
-        except Exception as e:
-            logger.error(f"Failed to get tenant summary: {e}")
-            return []
+        setting.setting_value = value
+        return self.setting_repo.update(setting)
     
-    def get_monthly_consumption_report(self, year: int = None, month: int = None) -> List[Dict]:
-        """Get monthly consumption report."""
-        from database import db_manager
-        
-        try:
-            query = "SELECT * FROM monthly_consumption"
-            params = []
-            
-            if year and month:
-                query += " WHERE EXTRACT(YEAR FROM month) = %s AND EXTRACT(MONTH FROM month) = %s"
-                params = [year, month]
-            elif year:
-                query += " WHERE EXTRACT(YEAR FROM month) = %s"
-                params = [year]
-            
-            query += " ORDER BY month DESC, apartment_number"
-            
-            result = db_manager.execute_query(query, tuple(params), fetch=True)
-            return [dict(row) for row in result]
-            
-        except Exception as e:
-            logger.error(f"Failed to get monthly consumption report: {e}")
-            return []
-    
-    def get_outstanding_bills(self) -> List[Dict]:
-        """Get all outstanding (unpaid) bills."""
-        from database import db_manager
-        
-        try:
-            query = """
-                SELECT b.*, t.name, t.apartment_number
-                FROM bills b
-                JOIN tenants t ON b.tenant_id = t.tenant_id
-                WHERE b.bill_status != 'paid'
-                ORDER BY b.due_date ASC
-            """
-            
-            result = db_manager.execute_query(query, fetch=True)
-            return [dict(row) for row in result]
-            
-        except Exception as e:
-            logger.error(f"Failed to get outstanding bills: {e}")
-            return []
+    def _get_default_rate(self) -> float:
+        """Get the default rate per unit from settings."""
+        setting = self.setting_repo.get_by_key('water_rate_per_unit')
+        return float(setting.setting_value) if setting else 2.50  # Default to $2.50
